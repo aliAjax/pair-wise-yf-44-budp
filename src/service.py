@@ -2,7 +2,7 @@ from uuid import uuid4
 
 from .audit import AuditTrail
 from .domain import ConflictError, NotFoundError
-from .rules import RuleEngine
+from .rules import RuleEngine, validate_extend_payload
 
 
 class DomainService:
@@ -41,9 +41,16 @@ class DomainService:
         entity = self.repository.get_entity(entity_id)
         if not entity:
             raise NotFoundError("entity not found: " + entity_id)
+        payload = dict(data or {})
+        if (
+            entity["kind"] == "action_item"
+            and action == "extend"
+            and self._control_list_frozen(entity)
+        ):
+            return self._reschedule_frozen_item(actor, entity, payload)
         expected = int(expected_version) if expected_version is not None else entity["version"]
         next_status, patch = self.rules.validate_transition(
-            actor, entity, action, dict(data or {}), self._lookup
+            actor, entity, action, payload, self._lookup
         )
         merged = dict(entity["data"])
         merged.update(patch)
@@ -57,6 +64,51 @@ class DomainService:
             {"patch": patch},
         )
         return updated
+
+    def _control_list_frozen(self, item):
+        """投产时已冻结本次控制清单：父变更已投产且快照中包含该行动项。"""
+        change = self.repository.get_entity(item["data"].get("change_id"))
+        if not change or change["status"] != "commissioned":
+            return False
+        frozen_ids = {
+            entry.get("action_item_id")
+            for entry in change["data"].get("frozen_controls", [])
+        }
+        return item["id"] in frozen_ids
+
+    def _reschedule_frozen_item(self, actor, entity, data):
+        """投产后改期：冻结清单不再改动，延期归入一条新的 open 待办。"""
+        self.rules._ensure_role(actor, ("admin", "safety"))
+        new_due = validate_extend_payload(data)
+        change_id = entity["data"]["change_id"]
+        follow_up = {
+            "change_id": change_id,
+            "description": entity["data"].get("description"),
+            "owner": entity["data"].get("owner"),
+            "due_date": new_due,
+            "rescheduled_from": entity["id"],
+            "reschedule_reason": str(data["reason"]).strip(),
+        }
+        new_entity = self.repository.create_entity(
+            str(uuid4()), "action_item", "open", follow_up, actor.user_id
+        )
+        self.audit.record(
+            new_entity["id"],
+            actor,
+            "create",
+            None,
+            "open",
+            {"kind": "action_item", "rescheduled_from": entity["id"]},
+        )
+        self.audit.record(
+            entity["id"],
+            actor,
+            "reschedule",
+            entity["status"],
+            entity["status"],
+            {"new_action_item_id": new_entity["id"], "reason": follow_up["reschedule_reason"]},
+        )
+        return new_entity
 
     def get(self, entity_id):
         entity = self.repository.get_entity(entity_id)

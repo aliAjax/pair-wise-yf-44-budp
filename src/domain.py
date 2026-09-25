@@ -27,6 +27,16 @@ class InvalidTransition(DomainError):
     """The requested state transition is not valid."""
 
 
+class CommissionBlocked(ValidationError):
+    """Pre-commission safety confirmation found blocking items."""
+
+    def __init__(self, blockers):
+        self.blockers = blockers
+        super().__init__(
+            "commission blocked by %d safety check(s)" % len(blockers)
+        )
+
+
 class Role(str, Enum):
     viewer = "viewer"
     admin = "admin"

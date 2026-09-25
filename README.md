@@ -26,6 +26,27 @@ python3 app.py --db ./data.db --port 8310
 
 - `unit`：装置运行状态；`change`：变更申请；`action_item`：风险控制行动项。
 
+行动项创建时必须登记有效期 `due_date`（YYYY-MM-DD），`verify` 动作必须记录校核人 `verifier`。
+
+## 投产前安全确认
+
+变更进入 `implemented` 后，`commission`（投产）不再只看行动项是否核验过，还会一次性返回全部阻断项（HTTP 400，响应体含 `blockers` 数组）：
+
+- `control_expired`：控制措施已过当前有效期（需安全员延期）。
+- `independent_check_required`：校核人与完成人相同，必须由第三人独立校核。
+- `safety_review_required`：高风险（`high`/`critical`）变更缺少安全员复核。
+- `action_item_not_verified` / `due_date_not_registered`：行动项未完成校核或未登记有效期。
+
+相关动作：
+
+- 行动项 `extend`：仅 `safety` 角色可执行，需提供 `new_due_date`（必须晚于当前期限）和 `reason`；延期追加进 `extensions` 列表，原 `due_date` 始终保留。
+- 变更 `safety_review`：仅 `safety` 角色在 `implemented` 状态执行（状态不变），记录 `safety_reviewed_by`。
+- 投产成功时把当前控制清单快照写入变更数据 `frozen_controls`；投产后再对行动项发起 `extend` 不会改动冻结清单，而是自动生成一条新的 `open` 行动项（`rescheduled_from` 指回原项）。
+
+## 演示页面
+
+打开根路径可在页面上生成演示场景（可选过期/自校核/高风险），并直接发起安全员复核、延期、投产；阻断项、冻结结果和新待办都会在页面展示。
+
 ## 主要接口
 
 - `GET /health`：健康检查。
