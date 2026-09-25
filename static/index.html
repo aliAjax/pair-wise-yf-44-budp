@@ -5,30 +5,220 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>化工装置变更与工艺安全管理</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; color: #1f2937; }
-    main { max-width: 820px; margin: auto; }
-    pre { background: #f3f4f6; padding: 1rem; border-radius: 8px; overflow-x: auto; }
-    button { padding: .5rem .8rem; cursor: pointer; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif; margin: 2rem; color: #1f2937; background: #f9fafb; }
+    main { max-width: 980px; margin: auto; }
+    h1 { font-size: 1.4rem; }
+    h2 { font-size: 1.1rem; margin-top: 1.6rem; }
+    .bar { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: .8rem 1rem; display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+    input, select { padding: .4rem .5rem; border: 1px solid #d1d5db; border-radius: 6px; font-size: .9rem; }
+    button { padding: .4rem .8rem; cursor: pointer; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; font-size: .85rem; }
+    button.secondary { background: #fff; color: #2563eb; }
+    button.danger { border-color: #b91c1c; background: #b91c1c; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden; }
+    th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid #f3f4f6; font-size: .85rem; vertical-align: top; }
+    th { background: #f3f4f6; }
+    tr:last-child td { border-bottom: none; }
+    .tag { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-size: .75rem; background: #e5e7eb; }
+    .tag.implemented { background: #dbeafe; color: #1d4ed8; }
+    .tag.commissioned { background: #dcfce7; color: #166534; }
+    .tag.verified { background: #dcfce7; color: #166534; }
+    .tag.expired { background: #fee2e2; color: #991b1b; }
+    .inline { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+    .inline input[type=date], .inline input[type=text] { width: auto; }
+    #result { background: #111827; color: #e5e7eb; padding: 1rem; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; font-size: .82rem; min-height: 3rem; }
+    #result.ok { border-left: 4px solid #16a34a; }
+    #result.blocked { border-left: 4px solid #dc2626; }
+    .blocker { color: #fca5a5; }
+    .muted { color: #6b7280; font-size: .78rem; }
+    .mono { font-family: ui-monospace, Menlo, monospace; }
   </style>
 </head>
 <body>
 <main>
-  <h1>化工装置变更与工艺安全管理</h1>
-  <p>这是最小演示页面。使用浏览器或 curl 调用 JSON API。</p>
-  <p><button onclick="checkHealth()">检查服务状态</button></p>
+  <h1>化工装置变更与工艺安全管理 — 投产前安全确认</h1>
+
+  <div class="bar">
+    <label>操作人 <input id="userId" value="admin" size="10"></label>
+    <label>角色
+      <select id="role">
+        <option value="admin">admin（管理员）</option>
+        <option value="safety">safety（安全员）</option>
+        <option value="engineer">engineer（工程师）</option>
+        <option value="verifier">verifier（校核人）</option>
+        <option value="operator">operator（操作员）</option>
+      </select>
+    </label>
+    <button class="secondary" onclick="loadAll()">刷新清单</button>
+    <button class="secondary" onclick="checkHealth()">健康检查</button>
+  </div>
+
+  <h2>变更申请（可发起安全员复核 / 投产）</h2>
+  <table>
+    <thead><tr><th>ID</th><th>说明</th><th>状态</th><th>风险/复核</th><th>操作</th></tr></thead>
+    <tbody id="changes"><tr><td colspan="5" class="muted">点击“刷新清单”加载</td></tr></tbody>
+  </table>
+
+  <h2>风险控制行动项（可发起延期）</h2>
+  <table>
+    <thead><tr><th>ID</th><th>说明/所属变更</th><th>状态</th><th>有效期</th><th>完成/校核</th><th>延期操作</th></tr></thead>
+    <tbody id="items"><tr><td colspan="6" class="muted">点击“刷新清单”加载</td></tr></tbody>
+  </table>
+
+  <h2>处理结果</h2>
   <pre id="result">等待操作</pre>
-  <h2>常用接口</h2>
-  <pre>GET  /health
-GET  /api/&lt;kind&gt;
-POST /api/&lt;kind&gt;
-GET  /api/entities/&lt;id&gt;
-POST /api/entities/&lt;id&gt;/actions</pre>
 </main>
 <script>
-async function checkHealth() {
-  const response = await fetch('/health');
-  document.getElementById('result').textContent = JSON.stringify(await response.json(), null, 2);
+const $ = (id) => document.getElementById(id);
+
+function actorHeaders() {
+  return {"X-User-Id": $("userId").value || "anonymous", "X-Role": $("role").value};
 }
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers: {"Content-Type": "application/json", ...actorHeaders()},
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  const payload = await response.json().catch(() => ({}));
+  return {status: response.status, ok: response.ok, payload};
+}
+
+function showResult(res) {
+  const el = $("result");
+  el.classList.remove("ok", "blocked");
+  if (res.ok) {
+    el.classList.add("ok");
+    el.textContent = "✓ 处理成功（HTTP " + res.status + "）\n" + JSON.stringify(res.payload, null, 2);
+  } else {
+    el.classList.add("blocked");
+    const blockers = (res.payload.blockers || []).map((b, i) =>
+      "  [" + (i + 1) + "] (" + b.code + ") " + b.message +
+      (b.action_item ? " → 行动项 " + b.action_item : "")
+    ).join("\n");
+    el.textContent = "✗ 处理被阻断（HTTP " + res.status + "）：" + (res.payload.error || res.statusText) +
+      (blockers ? "\n阻断项：\n" + blockers : "") +
+      "\n\n完整响应：\n" + JSON.stringify(res.payload, null, 2);
+  }
+}
+
+async function checkHealth() {
+  const res = await api("/health");
+  showResult(res);
+}
+
+async function loadAll() {
+  const [changes, items] = await Promise.all([
+    api("/api/change"), api("/api/action_item")
+  ]);
+  renderChanges(changes.payload.items || []);
+  renderItems(items.payload.items || []);
+}
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"]/g, (c) =>
+    ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+}
+
+function shortId(id) { return esc(String(id).slice(0, 8)); }
+
+function renderChanges(list) {
+  if (!list.length) {
+    $("changes").innerHTML = '<tr><td colspan="5" class="muted">暂无变更</td></tr>';
+    return;
+  }
+  $("changes").innerHTML = list.map((c) => {
+    const d = c.data || {};
+    const risk = d.risk_level || "—";
+    const high = ["high", "critical"].includes(String(risk).toLowerCase());
+    const review = d.safety_review_by
+      ? '<span class="tag verified">已复核:' + esc(d.safety_review_by) + "</span>"
+      : high ? '<span class="tag expired">缺安全员复核</span>' : '<span class="muted">非高风险</span>';
+    const actions = c.status === "implemented"
+      ? '<div class="inline">'
+        + '<input type="text" id="note-' + esc(c.id) + '" placeholder="复核意见" size="14">'
+        + '<button class="secondary" onclick="safetyReview(\'' + esc(c.id) + '\')">安全员复核</button>'
+        + '<label class="muted"><input type="checkbox" id="tests-' + esc(c.id) + '" checked> 测试通过</label>'
+        + '<button class="danger" onclick="commission(\'' + esc(c.id) + '\')">申请投产</button>'
+        + "</div>"
+      : '<span class="muted">当前状态不可投产</span>';
+    return "<tr>"
+      + '<td class="mono" title="' + esc(c.id) + '">' + shortId(c.id) + "</td>"
+      + "<td>" + esc(d.description) + "</td>"
+      + '<td><span class="tag ' + esc(c.status) + '">' + esc(c.status) + "</span></td>"
+      + "<td>" + esc(risk) + "<br>" + review + "</td>"
+      + "<td>" + actions + "</td>"
+      + "</tr>";
+  }).join("");
+}
+
+function renderItems(list) {
+  if (!list.length) {
+    $("items").innerHTML = '<tr><td colspan="6" class="muted">暂无行动项</td></tr>';
+    return;
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  $("items").innerHTML = list.map((it) => {
+    const d = it.data || {};
+    const expired = d.valid_until && d.valid_until < today;
+    const selfChecked = d.completed_by && d.verifier && d.completed_by === d.verifier;
+    const deadline = d.valid_until
+      ? esc(d.valid_until) + (expired ? ' <span class="tag expired">已过期</span>' : "")
+      : '<span class="tag expired">未登记</span>';
+    const original = d.original_valid_until
+      ? '<div class="muted">原期限: ' + esc(d.original_valid_until) + "（延期 " + ((d.extensions || []).length) + " 次）</div>"
+      : "";
+    const followUp = d.follow_up_of
+      ? '<div class="muted">续自冻结项 ' + shortId(d.follow_up_of) + "</div>"
+      : "";
+    const checks = esc(d.completed_by || "—") + " / " + esc(d.verifier || "—")
+      + (selfChecked ? ' <span class="tag expired">同人校核</span>' : "");
+    const form = '<div class="inline">'
+      + '<input type="date" id="until-' + esc(it.id) + '">'
+      + '<input type="text" id="reason-' + esc(it.id) + '" placeholder="延期理由" size="16">'
+      + '<button onclick="extendItem(\'' + esc(it.id) + '\')">发起延期</button>'
+      + "</div>";
+    return "<tr>"
+      + '<td class="mono" title="' + esc(it.id) + '">' + shortId(it.id) + "</td>"
+      + "<td>" + esc(d.description) + followUp
+      + '<div class="muted">变更: ' + shortId(d.change_id) + "</div></td>"
+      + '<td><span class="tag ' + esc(it.status) + '">' + esc(it.status) + "</span></td>"
+      + "<td>" + deadline + original + "</td>"
+      + "<td>" + checks + "</td>"
+      + "<td>" + form + "</td>"
+      + "</tr>";
+  }).join("");
+}
+
+async function safetyReview(id) {
+  const note = $("note-" + id).value.trim();
+  if (!note) return showResult({ok: false, status: 400, payload: {error: "请填写复核意见"}});
+  showResult(await api("/api/entities/" + id + "/actions",
+    {body: {action: "safety_review", data: {note}}}));
+  loadAll();
+}
+
+async function commission(id) {
+  const tests_passed = $("tests-" + id).checked;
+  showResult(await api("/api/entities/" + id + "/actions",
+    {body: {action: "commission", data: {tests_passed}}}));
+  loadAll();
+}
+
+async function extendItem(id) {
+  const valid_until = $("until-" + id).value;
+  const reason = $("reason-" + id).value.trim();
+  if (!valid_until || !reason) {
+    return showResult({ok: false, status: 400, payload: {error: "请填写新期限和延期理由"}});
+  }
+  const res = await api("/api/entities/" + id + "/actions",
+    {body: {action: "extend", data: {valid_until, reason}}});
+  showResult(res);
+  loadAll();
+}
+
+loadAll();
 </script>
 </body>
 </html>

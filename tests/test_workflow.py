@@ -1,11 +1,16 @@
 import tempfile
 import unittest
+from datetime import date, timedelta
 from pathlib import Path
 
 from src.domain import Actor
 from src.repository import SQLiteRepository
 from src.rules import RuleEngine
 from src.service import DomainService
+
+
+def _future(days):
+    return (date.today() + timedelta(days=days)).isoformat()
 
 
 def _resolve(value, created):
@@ -32,7 +37,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_full_workflow(self):
         created = {}
-        steps = [{'op': 'create', 'as': 'unit', 'kind': 'unit', 'data': {'name': 'Reactor-1', 'location': 'Plant-A'}}, {'op': 'create', 'as': 'change', 'kind': 'change', 'data': {'unit_id': '{unit}', 'description': 'Change alarm threshold'}}, {'op': 'transition', 'target': 'change', 'action': 'assess', 'data': {'risk_level': 'medium', 'analyst': 'E-1'}, 'expect': 'assessed'}, {'op': 'transition', 'target': 'change', 'action': 'approve', 'data': {'approvals': ['S-1', 'S-2'], 'permit_id': 'MOC-1'}, 'expect': 'approved'}, {'op': 'transition', 'target': 'change', 'action': 'implement', 'data': {'procedure_version': 'v2'}, 'expect': 'implemented'}, {'op': 'create', 'as': 'item', 'kind': 'action_item', 'data': {'change_id': '{change}', 'description': 'Train operators', 'owner': 'O-1'}}, {'op': 'transition', 'target': 'item', 'action': 'complete', 'data': {'completed_by': 'O-1', 'evidence': 'training-log'}, 'expect': 'completed'}, {'op': 'transition', 'target': 'item', 'action': 'verify', 'data': {'verifier': 'V-1'}, 'expect': 'verified'}, {'op': 'transition', 'target': 'change', 'action': 'commission', 'data': {'tests_passed': True}, 'expect': 'commissioned'}, {'op': 'transition', 'target': 'change', 'action': 'rollback', 'data': {'reason': 'unexpected drift'}, 'expect': 'rolled_back'}]
+        steps = [{'op': 'create', 'as': 'unit', 'kind': 'unit', 'data': {'name': 'Reactor-1', 'location': 'Plant-A'}}, {'op': 'create', 'as': 'change', 'kind': 'change', 'data': {'unit_id': '{unit}', 'description': 'Change alarm threshold'}}, {'op': 'transition', 'target': 'change', 'action': 'assess', 'data': {'risk_level': 'medium', 'analyst': 'E-1'}, 'expect': 'assessed'}, {'op': 'transition', 'target': 'change', 'action': 'approve', 'data': {'approvals': ['S-1', 'S-2'], 'permit_id': 'MOC-1'}, 'expect': 'approved'}, {'op': 'transition', 'target': 'change', 'action': 'implement', 'data': {'procedure_version': 'v2'}, 'expect': 'implemented'}, {'op': 'create', 'as': 'item', 'kind': 'action_item', 'data': {'change_id': '{change}', 'description': 'Train operators', 'owner': 'O-1', 'valid_until': _future(30)}}, {'op': 'transition', 'target': 'item', 'action': 'complete', 'data': {'completed_by': 'O-1', 'evidence': 'training-log'}, 'expect': 'completed'}, {'op': 'transition', 'target': 'item', 'action': 'verify', 'data': {'verifier': 'V-1'}, 'expect': 'verified'}, {'op': 'transition', 'target': 'change', 'action': 'commission', 'data': {'tests_passed': True}, 'expect': 'commissioned'}, {'op': 'transition', 'target': 'change', 'action': 'rollback', 'data': {'reason': 'unexpected drift'}, 'expect': 'rolled_back'}]
         for step in steps:
             if step["op"] == "create":
                 entity = self.service.create(
@@ -52,6 +57,12 @@ class WorkflowTest(unittest.TestCase):
                 )
             if "expect" in step:
                 self.assertEqual(entity["status"], step["expect"])
+
+        commissioned = self.service.get(created["change"])
+        self.assertEqual(len(commissioned["data"]["frozen_controls"]), 1)
+        self.assertEqual(
+            commissioned["data"]["frozen_controls"][0]["verifier"], "V-1"
+        )
 
 
 if __name__ == "__main__":

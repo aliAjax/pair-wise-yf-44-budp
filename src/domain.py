@@ -27,6 +27,16 @@ class InvalidTransition(DomainError):
     """The requested state transition is not valid."""
 
 
+class PreStartupSafetyBlocked(ValidationError):
+    """Pre-startup safety confirmation found one or more blocking items."""
+
+    def __init__(self, blockers):
+        self.blockers = list(blockers)
+        super().__init__(
+            "pre-startup safety confirmation blocked: %d item(s)" % len(self.blockers)
+        )
+
+
 class Role(str, Enum):
     viewer = "viewer"
     admin = "admin"

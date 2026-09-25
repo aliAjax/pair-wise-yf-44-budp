@@ -41,9 +41,31 @@ class DomainService:
         entity = self.repository.get_entity(entity_id)
         if not entity:
             raise NotFoundError("entity not found: " + entity_id)
+        payload = dict(data or {})
+        kind = self.rules.normalize_kind(entity["kind"])
+
+        # 投产时已冻结控制清单：之后对行动项改期归入新待办，不改动冻结记录
+        if kind == "action_item" and action == "extend":
+            change = self._lookup("change", "id", entity["data"].get("change_id"))
+            change = change[0] if change else None
+            if self.rules.controls_frozen(change):
+                todo_data = self.rules.build_follow_up_todo(
+                    actor, entity, payload, self._lookup
+                )
+                todo = self.create(actor, "action_item", todo_data)
+                self.audit.record(
+                    entity_id,
+                    actor,
+                    "extend_follow_up",
+                    entity["status"],
+                    entity["status"],
+                    {"follow_up_id": todo["id"], "reason": payload.get("reason")},
+                )
+                return todo
+
         expected = int(expected_version) if expected_version is not None else entity["version"]
         next_status, patch = self.rules.validate_transition(
-            actor, entity, action, dict(data or {}), self._lookup
+            actor, entity, action, payload, self._lookup
         )
         merged = dict(entity["data"])
         merged.update(patch)
